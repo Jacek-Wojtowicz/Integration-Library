@@ -1,11 +1,14 @@
 package com.jw.mail.smtp;
 
 import com.jw.mail.core.exception.MailException;
+import com.jw.mail.core.providers.AttachmentEmailProvider;
 import com.jw.mail.core.providers.HtmlEmailProvider;
 import com.jw.mail.core.providers.SingleEmailProvider;
 import com.jw.mail.core.type.ContentType;
 import com.jw.mail.core.type.ProviderType;
+import com.jw.mail.smtp.entity.SmtpAttachment;
 import com.jw.mail.smtp.configuration.SmtpConfiguration;
+import jakarta.activation.DataHandler;
 import jakarta.mail.*;
 import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeBodyPart;
@@ -14,6 +17,7 @@ import jakarta.mail.internet.MimeMultipart;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Properties;
 
 import static com.jw.mail.smtp.configuration.SmtpConstants.*;
@@ -22,8 +26,8 @@ import static jakarta.mail.Message.RecipientType.TO;
 
 @Component
 @RequiredArgsConstructor
-public class SmtpSingleEmailProvider
-        implements SingleEmailProvider, HtmlEmailProvider {
+public class SmtpEmailProvider
+        implements SingleEmailProvider, HtmlEmailProvider, AttachmentEmailProvider<SmtpAttachment> {
 
     private final SmtpConfiguration configuration;
 
@@ -49,10 +53,7 @@ public class SmtpSingleEmailProvider
     @Override
     public void sendEmail(String to, String subject, String body) {
         try {
-            MimeMessage message = new MimeMessage(createSession());
-            message.setFrom(new InternetAddress(configuration.getFrom()));
-            message.setRecipients(TO, InternetAddress.parse(to));
-            message.setSubject(subject);
+            MimeMessage message = getMimeMessage(to, subject);
             message.setText(body);
 
             Transport.send(message);
@@ -64,10 +65,7 @@ public class SmtpSingleEmailProvider
     @Override
     public void sendHtmlEmail(String to, String subject, String htmlContent) {
         try {
-            Message message = new MimeMessage(createSession());
-            message.setFrom(new InternetAddress(configuration.getFrom()));
-            message.setRecipients(TO, InternetAddress.parse(to));
-            message.setSubject(subject);
+            Message message = getMimeMessage(to, subject);
 
             MimeBodyPart mimeBodyPart = new MimeBodyPart();
             mimeBodyPart.setContent(htmlContent, ContentType.HTML);
@@ -80,6 +78,40 @@ public class SmtpSingleEmailProvider
             Transport.send(message);
         } catch (Exception e) {
             throw new MailException(ProviderType.SMTP, "Failed to send HTML mail via SMTP", e);
+        }
+    }
+
+    private MimeMessage getMimeMessage(String to, String subject) throws MessagingException {
+        MimeMessage message = new MimeMessage(createSession());
+        message.setFrom(new InternetAddress(configuration.getFrom()));
+        message.setRecipients(TO, InternetAddress.parse(to));
+        message.setSubject(subject);
+        return message;
+    }
+
+    @Override
+    public void sendEmailWithAttachments(String to, String subject, String body, List<SmtpAttachment> mailAttachments) {
+        try {
+            Message message = getMimeMessage(to, subject);
+            MimeBodyPart textPart = new MimeBodyPart();
+            textPart.setText(body);
+
+            Multipart multipart = new MimeMultipart();
+            multipart.addBodyPart(textPart);
+
+            for (SmtpAttachment attachment : mailAttachments) {
+                MimeBodyPart attachmentPart = new MimeBodyPart();
+                DataHandler attachmentFolder = attachment.toMailProviderAttachmentFormat();
+                String fileName = attachment.getFileName();
+                attachmentPart.setDataHandler(attachmentFolder);
+                attachmentPart.setFileName(fileName);
+                multipart.addBodyPart(attachmentPart);
+            }
+
+            message.setContent(multipart);
+            Transport.send(message);
+        } catch (Exception e) {
+            throw new MailException(ProviderType.SMTP, "Failed to send attachment mail via SMTP", e);
         }
     }
 
@@ -112,8 +144,8 @@ public class SmtpSingleEmailProvider
             return this;
         }
 
-        public SmtpSingleEmailProvider build() {
-            return new SmtpSingleEmailProvider(configuration);
+        public SmtpEmailProvider build() {
+            return new SmtpEmailProvider(configuration);
         }
 
     }
